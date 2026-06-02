@@ -19,6 +19,7 @@ and a dispatch map to route calls.
 Key insight: "The loop didn't change at all. I just added tools."
 """
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -39,6 +40,7 @@ SYSTEM = f"You are a coding agent at {WORKDIR}. Use tools to solve tasks. Act, d
 
 
 def safe_path(p: str) -> Path:
+    """Return resolved path, ensuring it stays within WORKDIR."""
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
         raise ValueError(f"Path escapes workspace: {p}")
@@ -46,6 +48,7 @@ def safe_path(p: str) -> Path:
 
 
 def run_bash(command: str) -> str:
+    """Run a shell command and return stdout+stderr."""
     dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
     if any(d in command for d in dangerous):
         return "Error: Dangerous command blocked"
@@ -59,9 +62,10 @@ def run_bash(command: str) -> str:
 
 
 def run_read(path: str, limit: int = None) -> str:
+    print(f"[PROGRESS] 调用run_read: {path}")
     try:
-        text = safe_path(path).read_text()
-        lines = text.splitlines()
+        text = safe_path(path).read_text() # read_text函数用来读取文件内容，返回一个字符串
+        lines = text.splitlines() # splitlines函数用来将字符串按行分割成一个列表，默认以换行符为分隔符
         if limit and limit < len(lines):
             lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
         return "\n".join(lines)[:50000]
@@ -70,6 +74,7 @@ def run_read(path: str, limit: int = None) -> str:
 
 
 def run_write(path: str, content: str) -> str:
+    print(f"[PROGRESS] 调用run_write: {path}")
     try:
         fp = safe_path(path)
         fp.parent.mkdir(parents=True, exist_ok=True)
@@ -80,6 +85,7 @@ def run_write(path: str, content: str) -> str:
 
 
 def run_edit(path: str, old_text: str, new_text: str) -> str:
+    print(f"[PROGRESS] 调用run_edit: {path}")
     try:
         fp = safe_path(path)
         content = fp.read_text()
@@ -93,7 +99,9 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
 
 # -- The dispatch map: {tool_name: handler} --
 TOOL_HANDLERS = {
-    "bash":       lambda **kw: run_bash(kw["command"]),
+    "bash":       lambda **kw: run_bash(kw["command"]), 
+    # lambda表达式用来创建一个匿名函数，这里**kw表示接受任意数量的关键字参数，kw["command"]表示从参数中获取command键的值
+    # read_file函数接受path和limit参数，write_file函数接受path和content参数，edit_file函数接受path、old_text和new_text参数  
     "read_file":  lambda **kw: run_read(kw["path"], kw.get("limit")),
     "write_file": lambda **kw: run_write(kw["path"], kw["content"]),
     "edit_file":  lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
@@ -118,17 +126,21 @@ def agent_loop(messages: list):
             tools=TOOLS, max_tokens=8000,
         )
         messages.append({"role": "assistant", "content": response.content})
+        print(f"\033[35m[DEBUG] stop_reason: {response.stop_reason}\033[0m")
+        print(f"\033[35m[DEBUG] 工具调用前的消息历史: {json.dumps(messages, indent=2, default=str)}\033[0m")
         if response.stop_reason != "tool_use":
             return
         results = []
         for block in response.content:
             if block.type == "tool_use":
+                print(f"\033[35m[DEBUG] Tool use detected: {block.name}\033[0m")
                 handler = TOOL_HANDLERS.get(block.name)
                 output = handler(**block.input) if handler else f"Unknown tool: {block.name}"
-                print(f"> {block.name}:")
+                # print(f"> {block.name}:")
                 print(output[:200])
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
         messages.append({"role": "user", "content": results})
+        print(f"\033[35m[DEBUG] 工具调用完成后的消息历史: {json.dumps(messages, indent=2, default=str)}\033[0m")
 
 
 if __name__ == "__main__":

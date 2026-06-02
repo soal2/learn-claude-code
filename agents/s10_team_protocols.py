@@ -102,6 +102,9 @@ class MessageBus:
         }
         if extra:
             msg.update(extra)
+        # 日志：记录每次消息发送，方便观察协议流转
+        req_id = msg.get("request_id") or msg.get("request_id", None)
+        print(f"[消息总线] 发送: type={msg_type} from={sender} to={to} request_id={req_id}")
         inbox_path = self.dir / f"{to}.jsonl"
         with open(inbox_path, "a") as f:
             f.write(json.dumps(msg) + "\n")
@@ -115,7 +118,10 @@ class MessageBus:
         for line in inbox_path.read_text().strip().splitlines():
             if line:
                 messages.append(json.loads(line))
+        # 日志：读取并清空收件箱，显示读取到的消息数
         inbox_path.write_text("")
+        if messages:
+            print(f"[消息总线] {name} 读取到 {len(messages)} 条消息，已经从收件箱移除")
         return messages
 
     def broadcast(self, sender: str, content: str, teammates: list) -> str:
@@ -124,6 +130,7 @@ class MessageBus:
             if name != sender:
                 self.send(sender, name, content, "broadcast")
                 count += 1
+        print(f"[消息总线] 广播: from={sender} 到 {count} 名成员")
         return f"Broadcast to {count} teammates"
 
 
@@ -171,6 +178,8 @@ class TeammateManager:
         )
         self.threads[name] = thread
         thread.start()
+        # 日志：启动一个新的 Teammate 线程（模拟持久代理）
+        print(f"[队伍管理] 已 spawn 成员: {name} (role={role})")
         return f"Spawned '{name}' (role: {role})"
 
     def _teammate_loop(self, name: str, role: str, prompt: str):
@@ -181,10 +190,13 @@ class TeammateManager:
         )
         messages = [{"role": "user", "content": prompt}]
         tools = self._teammate_tools()
+        # 控制循环退出标志：当收到批准的 shutdown_response 时设为 True
         should_exit = False
         for _ in range(50):
             inbox = BUS.read_inbox(name)
+            # 将收件箱消息放入对话历史，供模型阅读
             for msg in inbox:
+                print(f"  [{name}] 收到消息: type={msg.get('type')} from={msg.get('from')}")
                 messages.append({"role": "user", "content": json.dumps(msg)})
             if should_exit:
                 break
@@ -205,7 +217,8 @@ class TeammateManager:
             for block in response.content:
                 if block.type == "tool_use":
                     output = self._exec(name, block.name, block.input)
-                    print(f"  [{name}] {block.name}: {str(output)[:120]}")
+                    # 日志：成员执行工具并记录结果的简短摘要
+                    print(f"  [{name}] 执行工具: {block.name} -> 结果摘要: {str(output)[:120]}")
                     results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -216,22 +229,31 @@ class TeammateManager:
             messages.append({"role": "user", "content": results})
         member = self._find_member(name)
         if member:
+            # 更新成员状态并保存配置
             member["status"] = "shutdown" if should_exit else "idle"
+            print(f"[队伍管理] 成员状态更新: {name} -> {member['status']}")
             self._save_config()
 
     def _exec(self, sender: str, tool_name: str, args: dict) -> str:
-        # these base tools are unchanged from s02
+        # 调用并执行工具；在关键分支打印中文日志，帮助理解协议处理
+        # 这些基础工具与 s02 保持一致
         if tool_name == "bash":
+            print(f"[{sender}] 调用 bash: {args.get('command')}")
             return _run_bash(args["command"])
         if tool_name == "read_file":
+            print(f"[{sender}] 调用 read_file: {args.get('path')}")
             return _run_read(args["path"])
         if tool_name == "write_file":
+            print(f"[{sender}] 调用 write_file: {args.get('path')} ({len(args.get('content',''))} bytes)")
             return _run_write(args["path"], args["content"])
         if tool_name == "edit_file":
+            print(f"[{sender}] 调用 edit_file: {args.get('path')}")
             return _run_edit(args["path"], args["old_text"], args["new_text"])
         if tool_name == "send_message":
+            print(f"[{sender}] 调用 send_message -> to={args.get('to')} type={args.get('msg_type','message')}")
             return BUS.send(sender, args["to"], args["content"], args.get("msg_type", "message"))
         if tool_name == "read_inbox":
+            print(f"[{sender}] 调用 read_inbox")
             return json.dumps(BUS.read_inbox(sender), indent=2)
         if tool_name == "shutdown_response":
             req_id = args["request_id"]
@@ -239,20 +261,24 @@ class TeammateManager:
             with _tracker_lock:
                 if req_id in shutdown_requests:
                     shutdown_requests[req_id]["status"] = "approved" if approve else "rejected"
+            # 将回应发送回 lead，并在日志中记录状态变化
             BUS.send(
                 sender, "lead", args.get("reason", ""),
                 "shutdown_response", {"request_id": req_id, "approve": approve},
             )
+            print(f"[{sender}] shutdown_response 已发送: request_id={req_id} approve={approve}")
             return f"Shutdown {'approved' if approve else 'rejected'}"
         if tool_name == "plan_approval":
             plan_text = args.get("plan", "")
             req_id = str(uuid.uuid4())[:8]
             with _tracker_lock:
                 plan_requests[req_id] = {"from": sender, "plan": plan_text, "status": "pending"}
+            # 提交计划请求并通知 lead，同时记录日志
             BUS.send(
                 sender, "lead", plan_text, "plan_approval_response",
                 {"request_id": req_id, "plan": plan_text},
             )
+            print(f"[{sender}] 提交计划申请: request_id={req_id} plan_len={len(plan_text)}")
             return f"Plan submitted (request_id={req_id}). Waiting for lead approval."
         return f"Unknown tool: {tool_name}"
 
@@ -356,6 +382,8 @@ def handle_shutdown_request(teammate: str) -> str:
         "lead", teammate, "Please shut down gracefully.",
         "shutdown_request", {"request_id": req_id},
     )
+    # 日志：lead 发起 shutdown 请求并记录跟踪 id
+    print(f"[协议][lead] 发起 shutdown_request -> to={teammate} request_id={req_id}")
     return f"Shutdown request {req_id} sent to '{teammate}' (status: pending)"
 
 
@@ -370,12 +398,17 @@ def handle_plan_review(request_id: str, approve: bool, feedback: str = "") -> st
         "lead", req["from"], feedback, "plan_approval_response",
         {"request_id": request_id, "approve": approve, "feedback": feedback},
     )
+    # 日志：lead 审批计划并通知申请者
+    print(f"[协议][lead] 计划审批: request_id={request_id} from={req['from']} approve={approve}")
     return f"Plan {req['status']} for '{req['from']}'"
 
 
 def _check_shutdown_status(request_id: str) -> str:
+    # 查询并返回 shutdown 请求的当前状态（用于 lead 检查）
     with _tracker_lock:
-        return json.dumps(shutdown_requests.get(request_id, {"error": "not found"}))
+        status = shutdown_requests.get(request_id, {"error": "not found"})
+    print(f"[协议][lead] 查询 shutdown 状态: request_id={request_id} -> {status}")
+    return json.dumps(status)
 
 
 # -- Lead tool dispatch (12 tools) --
@@ -427,6 +460,8 @@ def agent_loop(messages: list):
     while True:
         inbox = BUS.read_inbox("lead")
         if inbox:
+            # 日志：lead 收到新的收件箱消息，注入到对话历史以便模型处理
+            print(f"[主循环] lead 收到 {len(inbox)} 条消息，转入模型输入")
             messages.append({
                 "role": "user",
                 "content": f"<inbox>{json.dumps(inbox, indent=2)}</inbox>",
@@ -445,11 +480,13 @@ def agent_loop(messages: list):
         for block in response.content:
             if block.type == "tool_use":
                 handler = TOOL_HANDLERS.get(block.name)
+                print(f"[主循环] 模型请求使用工具: {block.name} (id={block.id})")
                 try:
                     output = handler(**block.input) if handler else f"Unknown tool: {block.name}"
                 except Exception as e:
                     output = f"Error: {e}"
-                print(f"> {block.name}:")
+                # 日志：打印工具调用结果的前 200 字，便于实时跟踪
+                print(f">>> 工具调用: {block.name} 返回: ")
                 print(str(output)[:200])
                 results.append({
                     "type": "tool_result",
@@ -469,11 +506,15 @@ if __name__ == "__main__":
         if query.strip().lower() in ("q", "exit", ""):
             break
         if query.strip() == "/team":
+            print("[命令] /team -> 列出当前队伍状态:")
             print(TEAM.list_all())
             continue
         if query.strip() == "/inbox":
+            print("[命令] /inbox -> 查看 lead 的收件箱并清空:")
             print(json.dumps(BUS.read_inbox("lead"), indent=2))
             continue
+        # 将用户输入追加到历史并交给 agent_loop 处理
+        print(f"[用户输入] 发送到 agent_loop: {query}")
         history.append({"role": "user", "content": query})
         agent_loop(history)
         response_content = history[-1]["content"]

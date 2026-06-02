@@ -1,3 +1,6 @@
-# agents/ - Harness implementations (s01-s12) + full reference (s_full)
-# Each file is self-contained and runnable: python agents/s01_agent_loop.py
-# The model is the agent. These files are the harness.
+"""My Python Package."""
+
+from .utils import add, subtract, multiply, divide
+
+__version__ = "0.1.0"
+__all__ = ["add", "subtract", "multiply", "divide"]

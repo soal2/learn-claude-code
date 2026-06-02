@@ -60,31 +60,42 @@ class SkillLoader:
     def __init__(self, skills_dir: Path):
         self.skills_dir = skills_dir
         self.skills = {}
+        print(f"[技能加载] 初始化技能加载器，目录: {self.skills_dir}")
         self._load_all()
 
     def _load_all(self):
         if not self.skills_dir.exists():
+            print(f"[技能加载] 技能目录不存在，跳过扫描: {self.skills_dir}")
             return
+        print("[技能加载] 开始扫描 SKILL.md 文件")
         for f in sorted(self.skills_dir.rglob("SKILL.md")):
+            print(f"[技能加载] 读取文件: {f}")
             text = f.read_text()
             meta, body = self._parse_frontmatter(text)
             name = meta.get("name", f.parent.name)
             self.skills[name] = {"meta": meta, "body": body, "path": str(f)}
+            print(f"[技能加载] 已加载技能: {name}")
+        print(f"[技能加载] 技能扫描完成，共加载 {len(self.skills)} 个技能")
 
     def _parse_frontmatter(self, text: str) -> tuple:
         """Parse YAML frontmatter between --- delimiters."""
+        # 先解析 SKILL.md 顶部的 YAML frontmatter，后面主体内容作为技能正文返回。
         match = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)
         if not match:
+            print("[技能加载] 未找到 frontmatter，直接把全文当作技能正文")
             return {}, text
         try:
             meta = yaml.safe_load(match.group(1)) or {}
+            print(f"[技能加载] 解析 frontmatter 成功: {meta.get('name', '(未命名)')}")
         except yaml.YAMLError:
+            print("[技能加载] frontmatter 解析失败，使用空元数据")
             meta = {}
         return meta, match.group(2).strip()
 
     def get_descriptions(self) -> str:
         """Layer 1: short descriptions for the system prompt."""
         if not self.skills:
+            print("[技能加载] 当前没有可用技能")
             return "(no skills available)"
         lines = []
         for name, skill in self.skills.items():
@@ -94,13 +105,17 @@ class SkillLoader:
             if tags:
                 line += f" [{tags}]"
             lines.append(line)
+        print("[技能加载] 已生成 system prompt 中使用的技能简介")
         return "\n".join(lines)
 
     def get_content(self, name: str) -> str:
         """Layer 2: full skill body returned in tool_result."""
+        print(f"[技能加载] 请求加载技能正文: {name}")
         skill = self.skills.get(name)
         if not skill:
+            print(f"[技能加载] 未找到技能: {name}")
             return f"Error: Unknown skill '{name}'. Available: {', '.join(self.skills.keys())}"
+        print(f"[技能加载] 返回技能正文: {name}")
         return f"<skill name=\"{name}\">\n{skill['body']}\n</skill>"
 
 
@@ -112,6 +127,7 @@ Use load_skill to access specialized knowledge before tackling unfamiliar topics
 
 Skills available:
 {SKILL_LOADER.get_descriptions()}"""
+print("[技能加载] 已构建 system prompt 中的技能清单")
 
 
 # -- Tool implementations --
@@ -186,29 +202,36 @@ TOOLS = [
 
 
 def agent_loop(messages: list):
+    print("[技能加载] 进入 agent_loop")
     while True:
+        print("[技能加载] 请求模型生成下一步动作")
         response = client.messages.create(
             model=MODEL, system=SYSTEM, messages=messages,
             tools=TOOLS, max_tokens=8000,
         )
+        print(f"[技能加载] 模型停止原因: {response.stop_reason}")
         messages.append({"role": "assistant", "content": response.content})
         if response.stop_reason != "tool_use":
+            print("[技能加载] 本轮没有工具调用，结束本次循环")
             return
         results = []
         for block in response.content:
             if block.type == "tool_use":
                 handler = TOOL_HANDLERS.get(block.name)
                 try:
+                    print(f"[技能加载] 处理工具调用: {block.name}，参数: {block.input}")
                     output = handler(**block.input) if handler else f"Unknown tool: {block.name}"
                 except Exception as e:
                     output = f"Error: {e}"
-                print(f"> {block.name}:")
+                print(f"[技能加载] 工具输出({block.name}):")
                 print(str(output)[:200])
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)})
+        print(f"[技能加载] 将 {len(results)} 条工具结果回填给模型")
         messages.append({"role": "user", "content": results})
 
 
 if __name__ == "__main__":
+    print("[技能加载] 程序启动，等待用户输入")
     history = []
     while True:
         try:
@@ -216,7 +239,9 @@ if __name__ == "__main__":
         except (EOFError, KeyboardInterrupt):
             break
         if query.strip().lower() in ("q", "exit", ""):
+            print("[技能加载] 收到退出指令，程序结束")
             break
+        print(f"[技能加载] 用户输入: {query}")
         history.append({"role": "user", "content": query})
         agent_loop(history)
         response_content = history[-1]["content"]

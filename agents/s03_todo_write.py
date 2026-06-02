@@ -53,12 +53,19 @@ class TodoManager:
     def __init__(self):
         self.items = []
 
+    """
+    更新待办事项列表。每个事项必须包含文本和状态（pending、in_progress、completed）。只能有一个事项处于进行中状态。
+    输入：items (list) - 待办事项列表，每个事项是一个包含id、text和status的字典。
+    输出：str - 格式化的待办事项列表字符串。
+    验证：最多允许20个事项；每个事项必须有文本；状态必须是有效的选项；只能有一个事项处于进行中状态。
+    """
     def update(self, items: list) -> str:
         if len(items) > 20:
             raise ValueError("Max 20 todos allowed")
-        validated = []
+        validated = [] # 验证后的待办事项列表
         in_progress_count = 0
         for i, item in enumerate(items):
+            # get函数提供了默认值，确保即使缺少某些字段也不会引发KeyError。文本被转换为字符串并去除两端空白，状态被转换为小写字符串以进行一致性检查。
             text = str(item.get("text", "")).strip()
             status = str(item.get("status", "pending")).lower()
             item_id = str(item.get("id", str(i + 1)))
@@ -74,6 +81,10 @@ class TodoManager:
         self.items = validated
         return self.render()
 
+    """
+    将待办事项列表格式化为字符串。每个事项前面有一个标记，表示其状态：未开始（[ ]）、进行中（[>]）或已完成（[x]）。最后一行显示已完成事项的数量和总事项数。
+    输出：str - 格式化的待办事项列表字符串。
+    """
     def render(self) -> str:
         if not self.items:
             return "No todos."
@@ -176,17 +187,33 @@ def agent_loop(messages: list):
         used_todo = False
         for block in response.content:
             if block.type == "tool_use":
+                # Log the incoming tool use request
+                print(f"\033[35m[TOOL CALL] id={block.id} name={block.name} input={block.input}")
                 handler = TOOL_HANDLERS.get(block.name)
                 try:
                     output = handler(**block.input) if handler else f"Unknown tool: {block.name}"
                 except Exception as e:
                     output = f"Error: {e}"
-                print(f"> {block.name}:")
-                print(str(output)[:200])
+                # Detailed logs for todo tool flow
+                if block.name == "todo":
+                    print("\033[33m[TODO] Invoking TODO.update with items:\033[0m")
+                    try:
+                        for it in block.input.get("items", []):
+                            print(f"\033[33m  - id={it.get('id')} text={it.get('text')!r} status={it.get('status')}\033[0m")
+                    except Exception:
+                        print("\033[31m  [TODO] (could not parse items)\033[0m")
+                print(f"\033[32m> {block.name}:\033[0m")
+                # print full output but cap length for safety
+                out_str = str(output)
+                print(out_str if len(out_str) < 2000 else out_str[:2000] + "... (truncated)")
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)})
+                print(f"\033[35m[DEBUG] 工具 {block.name} 调用结果: {output}\033[0m")
                 if block.name == "todo":
                     used_todo = True
+                    print("\033[33m[TODO] 更新被使用来，现在TodoManager的状态:\033[0m\n" + TODO.render())
         rounds_since_todo = 0 if used_todo else rounds_since_todo + 1
+        print(f"\033[36m[STATE] rounds_since_todo={rounds_since_todo}\033[0m")
+        # 如果模型连续3轮没有调用todo工具，注入一个提醒，提示它更新待办事项。这是为了防止模型忘记跟踪进度。提醒以特殊格式呈现，便于识别。
         if rounds_since_todo >= 3:
             results.append({"type": "text", "text": "<reminder>Update your todos.</reminder>"})
         messages.append({"role": "user", "content": results})

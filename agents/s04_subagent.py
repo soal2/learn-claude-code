@@ -116,24 +116,35 @@ CHILD_TOOLS = [
 
 # -- Subagent: fresh context, filtered tools, summary-only return --
 def run_subagent(prompt: str) -> str:
+    print("[子Agent] 开始执行")
+    print(f"[子Agent] 输入提示: {prompt[:200]}")
     sub_messages = [{"role": "user", "content": prompt}]  # fresh context
     for _ in range(30):  # safety limit
+        print("[子Agent] 请求模型回复")
         response = client.messages.create(
             model=MODEL, system=SUBAGENT_SYSTEM, messages=sub_messages,
             tools=CHILD_TOOLS, max_tokens=8000,
         )
+        print(f"[子Agent] 停止原因: {response.stop_reason}")
         sub_messages.append({"role": "assistant", "content": response.content})
         if response.stop_reason != "tool_use":
+            print("[子Agent] 模型已返回最终文本，退出工具循环")
             break
         results = []
         for block in response.content:
             if block.type == "tool_use":
                 handler = TOOL_HANDLERS.get(block.name)
+                print(f"[子Agent] 调用工具: {block.name} id={block.id}")
                 output = handler(**block.input) if handler else f"Unknown tool: {block.name}"
+                print(f"[子Agent] 工具结果: {str(output)[:200]}")
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)[:50000]})
+        print(f"[子Agent] 回填 {len(results)} 条工具结果到子Agent上下文")
         sub_messages.append({"role": "user", "content": results})
-    # Only the final text returns to the parent -- child context is discarded
-    return "".join(b.text for b in response.content if hasattr(b, "text")) or "(no summary)"
+    # 只返回子Agent最后一次输出的文本摘要；完整对话上下文不回传给父Agent。
+    summary = "".join(b.text for b in response.content if hasattr(b, "text")) or "(no summary)"
+    print(f"[子Agent] 最终摘要: {summary[:500]}")
+    print("[子Agent] 执行结束")
+    return summary
 
 
 # -- Parent tools: base tools + task dispatcher --
