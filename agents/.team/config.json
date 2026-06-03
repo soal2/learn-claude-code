@@ -3,7 +3,7 @@
   "members": [
     {
       "name": "alice",
-      "role": "coder",
+      "role": "backend-engineer",
       "status": "shutdown"
     },
     {

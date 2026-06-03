@@ -1,0 +1,10 @@
+{"event": "worktree.create.before", "ts": 1780464940.870751, "task": {"id": 1}, "worktree": {"name": "auth-refactor", "base_ref": "HEAD"}}
+{"event": "worktree.create.after", "ts": 1780464940.930974, "task": {"id": 1}, "worktree": {"name": "auth-refactor", "path": "/Users/eversse/Documents/codes/self-learning/learn-claude-code/.worktrees/auth-refactor", "branch": "wt/auth-refactor", "status": "active"}}
+{"event": "worktree.create.before", "ts": 1780464940.931114, "task": {"id": 2}, "worktree": {"name": "ui-login", "base_ref": "HEAD"}}
+{"event": "worktree.create.after", "ts": 1780464940.9736419, "task": {"id": 2}, "worktree": {"name": "ui-login", "path": "/Users/eversse/Documents/codes/self-learning/learn-claude-code/.worktrees/ui-login", "branch": "wt/ui-login", "status": "active"}}
+{"event": "worktree.keep", "ts": 1780465027.587602, "task": {"id": 2}, "worktree": {"name": "ui-login", "path": "/Users/eversse/Documents/codes/self-learning/learn-claude-code/.worktrees/ui-login", "status": "kept"}}
+{"event": "worktree.remove.before", "ts": 1780465063.467201, "task": {"id": 1}, "worktree": {"name": "auth-refactor", "path": "/Users/eversse/Documents/codes/self-learning/learn-claude-code/.worktrees/auth-refactor"}}
+{"event": "task.completed", "ts": 1780465063.520103, "task": {"id": 1, "subject": "Backend Auth", "status": "completed"}, "worktree": {"name": "auth-refactor"}}
+{"event": "worktree.remove.after", "ts": 1780465063.520332, "task": {"id": 1}, "worktree": {"name": "auth-refactor", "path": "/Users/eversse/Documents/codes/self-learning/learn-claude-code/.worktrees/auth-refactor", "status": "removed"}}
+{"event": "worktree.remove.before", "ts": 1780465122.7561758, "task": {"id": 2}, "worktree": {"name": "ui-login", "path": "/Users/eversse/Documents/codes/self-learning/learn-claude-code/.worktrees/ui-login"}}
+{"event": "worktree.remove.after", "ts": 1780465122.818936, "task": {"id": 2}, "worktree": {"name": "ui-login", "path": "/Users/eversse/Documents/codes/self-learning/learn-claude-code/.worktrees/ui-login", "status": "removed"}}

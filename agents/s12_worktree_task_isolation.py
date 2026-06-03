@@ -30,6 +30,13 @@ Tasks are the control plane and worktrees are the execution plane.
 Key insight: "Isolate by directory, coordinate by task ID."
 """
 
+# 说明（中文）：
+# 本文件提供一种基于目录隔离的并行任务执行模型。任务（.tasks）作为控制平面，
+# worktree（.worktrees）作为执行平面。每个任务可以绑定到一个独立的 git worktree，
+# 通过分支/目录隔离并行变更，避免不同任务之间的工作树冲突。事件总线用于记录生命周期事件，
+# TaskManager 用于持久化管理任务，WorktreeManager 负责创建/运行/移除工作树并维护索引。
+# 控制台日志（print）在关键步骤输出中文说明，帮助理解整个运行过程与原理。
+
 import json
 import os
 import re
@@ -104,6 +111,12 @@ class EventBus:
             payload["error"] = error
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload) + "\n")
+        # 在事件写入后，将事件概要打印到控制台，方便交互式观察。
+        try:
+            summary = f"[事件总线] event={event} task={task.get('id') if task else '-'} worktree={worktree.get('name') if worktree else '-'}"
+        except Exception:
+            summary = f"[事件总线] event={event}"
+        print(summary)
 
     def list_recent(self, limit: int = 20) -> str:
         n = max(1, min(int(limit or 20), 200))
@@ -146,6 +159,7 @@ class TaskManager:
     def _save(self, task: dict):
         self._path(task["id"]).write_text(json.dumps(task, indent=2))
 
+    # 创建一个新任务，分配一个唯一 ID，并保存到 .tasks 目录。返回任务详情的 JSON 字符串。创建时会打印中文日志，说明任务细节和状态。
     def create(self, subject: str, description: str = "") -> str:
         task = {
             "id": self._next_id,
@@ -160,6 +174,8 @@ class TaskManager:
         }
         self._save(task)
         self._next_id += 1
+        # 打印中文日志，说明任务创建细节
+        print(f"[任务] 创建任务 #{task['id']}: {subject} 状态={task['status']}")
         return json.dumps(task, indent=2)
 
     def get(self, task_id: int) -> str:
@@ -178,8 +194,10 @@ class TaskManager:
             task["owner"] = owner
         task["updated_at"] = time.time()
         self._save(task)
+        print(f"[任务] 更新任务 #{task_id}: status={task.get('status')} owner={task.get('owner')}")
         return json.dumps(task, indent=2)
 
+    # 将任务与工作树绑定，并更新状态为 in_progress（如果之前是 pending）。打印绑定日志说明关联细节。
     def bind_worktree(self, task_id: int, worktree: str, owner: str = "") -> str:
         task = self._load(task_id)
         task["worktree"] = worktree
@@ -189,15 +207,19 @@ class TaskManager:
             task["status"] = "in_progress"
         task["updated_at"] = time.time()
         self._save(task)
+        print(f"[任务] 绑定工作树: 任务#{task_id} -> worktree={worktree} owner={owner}")
         return json.dumps(task, indent=2)
 
+    # 解绑任务与工作树的关联，并打印日志说明解绑细节。
     def unbind_worktree(self, task_id: int) -> str:
         task = self._load(task_id)
         task["worktree"] = ""
         task["updated_at"] = time.time()
         self._save(task)
+        print(f"[任务] 解绑工作树: 任务#{task_id}")
         return json.dumps(task, indent=2)
 
+    # 列出所有任务，显示 ID、主题、状态、负责人和绑定的工作树。打印日志说明每个任务的细节和状态。
     def list_all(self) -> str:
         tasks = []
         for f in sorted(self.dir.glob("task_*.json")):
@@ -268,6 +290,7 @@ class WorktreeManager:
     def _save_index(self, data: dict):
         self.index_path.write_text(json.dumps(data, indent=2))
 
+    # 找到索引中匹配名称的工作树条目，返回其字典或 None。如果索引文件损坏或格式不正确，也会安全地返回 None。
     def _find(self, name: str) -> dict | None:
         idx = self._load_index()
         for wt in idx.get("worktrees", []):
@@ -275,12 +298,14 @@ class WorktreeManager:
                 return wt
         return None
 
+    # 验证工作树名称是否合法：1-40个字符，允许字母、数字、点、下划线和连字符。否则抛出 ValueError。
     def _validate_name(self, name: str):
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,40}", name or ""):
             raise ValueError(
                 "Invalid worktree name. Use 1-40 chars: letters, numbers, ., _, -"
             )
 
+    # 创建一个新的 git worktree，并在索引中记录它。可选地将其绑定到一个任务 ID。创建前后会发出事件，并在控制台打印详细日志说明每一步的操作和结果。
     def create(self, name: str, task_id: int = None, base_ref: str = "HEAD") -> str:
         self._validate_name(name)
         if self._find(name):
@@ -290,13 +315,17 @@ class WorktreeManager:
 
         path = self.dir / name
         branch = f"wt/{name}"
+        # 发出创建前事件并在控制台打印说明
         self.events.emit(
             "worktree.create.before",
             task={"id": task_id} if task_id is not None else {},
             worktree={"name": name, "base_ref": base_ref},
         )
+        print(f"[工作树] 开始创建 worktree='{name}' base_ref={base_ref} 绑定任务={task_id}")
         try:
+            # 使用 git worktree 创建一个隔离的目录（分支名: {branch}）
             self._run_git(["worktree", "add", "-b", branch, str(path), base_ref])
+            print(f"[工作树] git worktree 已创建: path={path} branch={branch}")
 
             entry = {
                 "name": name,
@@ -312,7 +341,9 @@ class WorktreeManager:
             self._save_index(idx)
 
             if task_id is not None:
+                # 将任务与工作树绑定，并打印绑定日志
                 self.tasks.bind_worktree(task_id, name)
+                print(f"[工作树] 已将任务 #{task_id} 绑定到 worktree='{name}'")
 
             self.events.emit(
                 "worktree.create.after",
@@ -324,6 +355,7 @@ class WorktreeManager:
                     "status": "active",
                 },
             )
+            print(f"[工作树] 创建完成: {name}，索引已更新")
             return json.dumps(entry, indent=2)
         except Exception as e:
             self.events.emit(
@@ -332,8 +364,10 @@ class WorktreeManager:
                 worktree={"name": name, "base_ref": base_ref},
                 error=str(e),
             )
+            print(f"[工作树] 创建失败: {e}")
             raise
 
+    # 列出所有工作树
     def list_all(self) -> str:
         idx = self._load_index()
         wts = idx.get("worktrees", [])
@@ -348,6 +382,7 @@ class WorktreeManager:
             )
         return "\n".join(lines)
 
+    # 检查工作树的状态
     def status(self, name: str) -> str:
         wt = self._find(name)
         if not wt:
@@ -365,6 +400,7 @@ class WorktreeManager:
         text = (r.stdout + r.stderr).strip()
         return text or "Clean worktree"
 
+    # 在工作树目录中运行命令，并返回输出摘要（限制前 50000 字符）。如果命令包含危险字符串，则阻止执行并返回错误。命令执行前后会在控制台打印日志说明正在执行的命令和输出摘要。
     def run(self, name: str, command: str) -> str:
         dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
         if any(d in command for d in dangerous):
@@ -377,6 +413,8 @@ class WorktreeManager:
         if not path.exists():
             return f"Error: Worktree path missing: {path}"
 
+        # 在工作树目录中运行命令，并打印运行说明与结果前缀
+        print(f"[工作树] 在 '{name}' (path={path}) 中执行命令: {command}")
         try:
             r = subprocess.run(
                 command,
@@ -387,26 +425,34 @@ class WorktreeManager:
                 timeout=300,
             )
             out = (r.stdout + r.stderr).strip()
+            summary = out[:1000] if out else "(no output)"
+            print(f"[工作树] 命令输出摘要: {summary}")
             return out[:50000] if out else "(no output)"
         except subprocess.TimeoutExpired:
+            print("[工作树] 命令执行超时 (300s)")
             return "Error: Timeout (300s)"
 
+    # 移除工作树目录，并可选地将其绑定的任务标记为 completed。移除前会发出事件并打印日志说明正在移除哪个工作树和相关选项。移除后会更新索引状态，并打印完成日志说明结果。如果发生错误，则发出失败事件并打印错误日志。
     def remove(self, name: str, force: bool = False, complete_task: bool = False) -> str:
         wt = self._find(name)
         if not wt:
             return f"Error: Unknown worktree '{name}'"
 
+        # 发出删除前事件并打印说明
         self.events.emit(
             "worktree.remove.before",
             task={"id": wt.get("task_id")} if wt.get("task_id") is not None else {},
             worktree={"name": name, "path": wt.get("path")},
         )
+        print(f"[工作树] 准备移除 worktree='{name}' path={wt.get('path')} force={force} complete_task={complete_task}")
         try:
             args = ["worktree", "remove"]
             if force:
                 args.append("--force")
             args.append(wt["path"])
+            # 使用 git worktree remove 移除目录（可加 --force）
             self._run_git(args)
+            print(f"[工作树] git worktree 已移除: {name}")
 
             if complete_task and wt.get("task_id") is not None:
                 task_id = wt["task_id"]
@@ -422,6 +468,7 @@ class WorktreeManager:
                     },
                     worktree={"name": name},
                 )
+                print(f"[任务] 任务 #{task_id} 标记为 completed 并与 worktree 解绑")
 
             idx = self._load_index()
             for item in idx.get("worktrees", []):
@@ -435,6 +482,7 @@ class WorktreeManager:
                 task={"id": wt.get("task_id")} if wt.get("task_id") is not None else {},
                 worktree={"name": name, "path": wt.get("path"), "status": "removed"},
             )
+            print(f"[工作树] 移除完成: {name} (索引已更新)")
             return f"Removed worktree '{name}'"
         except Exception as e:
             self.events.emit(
@@ -443,8 +491,9 @@ class WorktreeManager:
                 worktree={"name": name, "path": wt.get("path")},
                 error=str(e),
             )
+            print(f"[工作树] 移除失败: {e}")
             raise
-
+    
     def keep(self, name: str) -> str:
         wt = self._find(name)
         if not wt:
@@ -468,6 +517,7 @@ class WorktreeManager:
                 "status": "kept",
             },
         )
+        print(f"[工作树] 标记为保留: {name}")
         return json.dumps(kept, indent=2) if kept else f"Error: Unknown worktree '{name}'"
 
 
@@ -747,7 +797,8 @@ def agent_loop(messages: list):
                     output = handler(**block.input) if handler else f"Unknown tool: {block.name}"
                 except Exception as e:
                     output = f"Error: {e}"
-                print(f"> {block.name}:")
+                # 打印中文日志，说明哪个工具被调用以及返回摘要
+                print(f"[工具调用] {block.name}:")
                 print(str(output)[:200])
                 results.append(
                     {
@@ -760,9 +811,9 @@ def agent_loop(messages: list):
 
 
 if __name__ == "__main__":
-    print(f"Repo root for s12: {REPO_ROOT}")
+    print(f"[启动] 仓库根路径: {REPO_ROOT}")
     if not WORKTREES.git_available:
-        print("Note: Not in a git repo. worktree_* tools will return errors.")
+        print("[注意] 当前不在 git 仓库内。worktree_* 工具将返回错误或不可用。")
 
     history = []
     while True:
